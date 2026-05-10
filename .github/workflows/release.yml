@@ -3,6 +3,7 @@ name: Release
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
 
 permissions:
@@ -12,7 +13,7 @@ env:
   GO_VERSION: "1.24"
 
 jobs:
-  release:
+  build:
     name: ${{ matrix.platform }}
     runs-on: ubuntu-latest
     strategy:
@@ -77,29 +78,70 @@ jobs:
             *.zip)    unzip -q "$ARCHIVE" -d ffmpeg-bin ;;
           esac
 
-      - name: Upload client
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.platform }}-ffmpeg-over-ip-client
-          path: |
-            ffmpeg-over-ip-client${{ matrix.ext }}
-            LICENSE
-            LICENSE.ffmpeg
-          retention-days: 30
-
-      - name: Prepare server package
+      - name: Package archives
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          EXT: ${{ matrix.ext }}
         run: |
-          cp ffmpeg-bin/ffmpeg${{ matrix.ext }} ffmpeg${{ matrix.ext }}
-          cp ffmpeg-bin/ffprobe${{ matrix.ext }} ffprobe${{ matrix.ext }}
+          set -euo pipefail
+          mkdir -p dist client-staging server-staging
 
-      - name: Upload server
+          cp "ffmpeg-over-ip-client${EXT}" client-staging/
+          cp LICENSE LICENSE.ffmpeg client-staging/
+
+          cp "ffmpeg-over-ip-server${EXT}" server-staging/
+          cp "ffmpeg-bin/ffmpeg${EXT}" server-staging/
+          cp "ffmpeg-bin/ffprobe${EXT}" server-staging/
+          cp LICENSE LICENSE.ffmpeg server-staging/
+
+          # Naming MUST stay <platform>-ffmpeg-over-ip-<role>.zip — the
+          # install scripts (scripts/install-{client,server}.{sh,ps1})
+          # fetch this exact URL from /releases/latest/download/.
+          client_name="${PLATFORM}-ffmpeg-over-ip-client"
+          server_name="${PLATFORM}-ffmpeg-over-ip-server"
+          (cd client-staging && zip -r "../dist/${client_name}.zip" .)
+          (cd server-staging && zip -r "../dist/${server_name}.zip" .)
+          (cd dist \
+            && sha256sum "${client_name}.zip" > "${client_name}.zip.sha256" \
+            && sha256sum "${server_name}.zip" > "${server_name}.zip.sha256")
+
+      - name: Upload archives
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.platform }}-ffmpeg-over-ip-server
+          name: ffmpeg-over-ip-${{ matrix.platform }}
           path: |
-            ffmpeg-over-ip-server${{ matrix.ext }}
-            ffmpeg${{ matrix.ext }}
-            ffprobe${{ matrix.ext }}
-            LICENSE
-            LICENSE.ffmpeg
+            dist/${{ matrix.platform }}-ffmpeg-over-ip-client.zip
+            dist/${{ matrix.platform }}-ffmpeg-over-ip-client.zip.sha256
+            dist/${{ matrix.platform }}-ffmpeg-over-ip-server.zip
+            dist/${{ matrix.platform }}-ffmpeg-over-ip-server.zip.sha256
           retention-days: 30
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all archives
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: ffmpeg-over-ip-*
+          merge-multiple: true
+
+      - name: Aggregate checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          cat *.sha256 > SHA256SUMS
+          rm *.sha256
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*-ffmpeg-over-ip-*.zip
+            dist/SHA256SUMS
+          generate_release_notes: true
+          fail_on_unmatched_files: true
