@@ -287,8 +287,17 @@ func TestFstat(t *testing.T) {
 	if fr.FileSize != 5 {
 		t.Fatalf("expected size 5, got %d", fr.FileSize)
 	}
-	if fr.Mode&0o777 != 0o644 {
-		t.Fatalf("expected mode 0644, got 0%o", fr.Mode&0o777)
+	// Compare against what os.Stat reports for the same file rather than a
+	// hardcoded mode. Windows synthesizes file modes from file attributes
+	// (regular writable file → 0o666, read-only → 0o444) and ignores the
+	// group/other bits we passed to WriteFile, so 0o644 only holds on Unix.
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("os.Stat: %v", err)
+	}
+	wantMode := uint32(info.Mode().Perm())
+	if fr.Mode&0o777 != wantMode {
+		t.Fatalf("expected mode 0%o (from os.Stat), got 0%o", wantMode, fr.Mode&0o777)
 	}
 }
 
@@ -446,8 +455,13 @@ func TestMkdirNested(t *testing.T) {
 func TestOpenNonExistent(t *testing.T) {
 	h := NewHandler()
 
+	// Use a non-existent file inside an existing temp dir. A purely fictional
+	// path like "/nonexistent/path/xyz" produces ERROR_BAD_UNIT (20) on Windows,
+	// which collides numerically with POSIX ENOTDIR — testing ENOENT mapping
+	// shouldn't depend on that resolution quirk.
+	missing := filepath.Join(t.TempDir(), "does-not-exist.txt")
 	rt, rp := dispatch(t, h, protocol.MsgOpen, (&protocol.OpenRequest{
-		RequestID: 1, FileID: 1, Flags: protocol.FioORDONLY, Path: "/nonexistent/path/xyz",
+		RequestID: 1, FileID: 1, Flags: protocol.FioORDONLY, Path: missing,
 	}).Encode())
 	if rt != protocol.MsgIoError {
 		t.Fatalf("expected MsgIoError, got 0x%02x", rt)
@@ -795,8 +809,12 @@ func TestFtruncateInvalidFileID(t *testing.T) {
 func TestUnlinkNonExistent(t *testing.T) {
 	h := NewHandler()
 
+	// Same reasoning as TestOpenNonExistent: use a non-existent file inside an
+	// existing temp dir so Windows produces ERROR_FILE_NOT_FOUND, not the
+	// path-resolution edge case ERROR_BAD_UNIT.
+	missing := filepath.Join(t.TempDir(), "does-not-exist.txt")
 	rt, rp := dispatch(t, h, protocol.MsgUnlink, (&protocol.UnlinkRequest{
-		RequestID: 1, Path: "/nonexistent/path/xyz.txt",
+		RequestID: 1, Path: missing,
 	}).Encode())
 	if rt != protocol.MsgIoError {
 		t.Fatalf("expected MsgIoError, got 0x%02x", rt)
