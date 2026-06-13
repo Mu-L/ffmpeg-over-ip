@@ -91,6 +91,27 @@ ffmpeg-over-ip-client --debug-print-search-paths
 
 The server looks for `ffmpeg` and `ffprobe` in the same directory as its own binary. Ship all three together.
 
+## Client Config
+
+```jsonc
+{
+  // Required: server address (host:port or unix:/path/to/socket)
+  "address": "192.168.1.100:5050",
+  // Required: HMAC auth secret — must match server
+  "authSecret": "your-secret-here",
+  // Optional: see "Log" section below
+  "log": "/tmp/ffmpeg-over-ip.log",
+  // Optional: see "Fallback to local ffmpeg" section below (default: false)
+  "fallbackToLocal": true,
+  // Optional: rewrites applied only when running the local fallback
+  "fallbackRewrites": [
+    ["h264_nvenc", "h264_qsv"],
+  ],
+  // Optional: log original and rewritten args when fallback runs (default: false)
+  "debug": true,
+}
+```
+
 ## Performance Tuning
 
 The patched `ffmpeg` on the server tunnels its file reads back to the client. To cut round trips, the fio layer reads ahead, prefetches the next block while the current one is consumed, and caches recently-read ranges. Two optional environment variables tune this. They are read by `ffmpeg` at startup, so set them in the **server's** environment — the server passes its environment through to the `ffmpeg` it launches. The defaults suit most workloads; you rarely need to change them.
@@ -117,27 +138,6 @@ docker run \
   -e FFMPEG_OVER_IP_SERVER_ADDRESS=0.0.0.0:5050 \
   -e FFMPEG_OVER_IP_SERVER_AUTH_SECRET=my-secret \
   your-server-image
-```
-
-## Client Config
-
-```jsonc
-{
-  // Required: server address (host:port or unix:/path/to/socket)
-  "address": "192.168.1.100:5050",
-  // Required: HMAC auth secret — must match server
-  "authSecret": "your-secret-here",
-  // Optional: see "Log" section below
-  "log": "/tmp/ffmpeg-over-ip.log",
-  // Optional: see "Fallback to local ffmpeg" section below (default: false)
-  "fallbackToLocal": true,
-  // Optional: rewrites applied only when running the local fallback
-  "fallbackRewrites": [
-    ["h264_nvenc", "h264_qsv"],
-  ],
-  // Optional: log original and rewritten args when fallback runs (default: false)
-  "debug": true,
-}
 ```
 
 ## ffprobe
