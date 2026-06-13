@@ -1,6 +1,7 @@
 package filehandler
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -15,8 +16,13 @@ import (
 
 // Handler executes file I/O operations against the local filesystem.
 type Handler struct {
-	mu    sync.Mutex
-	files map[uint16]*os.File
+	mu      sync.Mutex
+	files   map[uint16]*os.File
+	readBuf []byte
+}
+
+type messageWriter interface {
+	WriteMessage(msgType uint8, payload []byte) error
 }
 
 func NewHandler() *Handler {
@@ -36,7 +42,7 @@ func (h *Handler) HandleMessage(msgType uint8, payload []byte) (uint8, []byte, e
 	case protocol.MsgOpen:
 		return h.handleOpen(payload)
 	case protocol.MsgRead:
-		return h.handleRead(payload)
+		return h.handleRead(payload, nil)
 	case protocol.MsgWrite:
 		return h.handleWrite(payload)
 	case protocol.MsgSeek:
@@ -56,6 +62,19 @@ func (h *Handler) HandleMessage(msgType uint8, payload []byte) (uint8, []byte, e
 	default:
 		return 0, nil, fmt.Errorf("unknown message type: 0x%02x", msgType)
 	}
+}
+
+// HandleReadTo handles a read request and writes the response before returning.
+// It reuses an internal response buffer, so callers must not retain the payload.
+func (h *Handler) HandleReadTo(payload []byte, w messageWriter) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	respType, respPayload, err := h.handleRead(payload, &h.readBuf)
+	if err != nil {
+		return err
+	}
+	return w.WriteMessage(respType, respPayload)
 }
 
 // CloseAll closes all open file handles. Used on session teardown.
@@ -108,7 +127,7 @@ func (h *Handler) handleOpen(payload []byte) (uint8, []byte, error) {
 	return protocol.MsgOpenOk, resp.Encode(), nil
 }
 
-func (h *Handler) handleRead(payload []byte) (uint8, []byte, error) {
+func (h *Handler) handleRead(payload []byte, reusable *[]byte) (uint8, []byte, error) {
 	req, err := protocol.DecodeReadRequest(payload)
 	if err != nil {
 		return 0, nil, err
@@ -119,14 +138,23 @@ func (h *Handler) handleRead(payload []byte) (uint8, []byte, error) {
 		return protocol.MsgIoError, ioErr(req.RequestID, protocol.FioEINVAL), nil
 	}
 
-	buf := make([]byte, req.NBytes)
-	n, err := f.Read(buf)
+	responseLen := 2 + int(req.NBytes)
+	var resp []byte
+	if reusable != nil {
+		if cap(*reusable) < responseLen {
+			*reusable = make([]byte, responseLen)
+		}
+		resp = (*reusable)[:responseLen]
+	} else {
+		resp = make([]byte, responseLen)
+	}
+	binary.BigEndian.PutUint16(resp[0:], req.RequestID)
+	n, err := f.Read(resp[2:])
 	if err != nil && err != io.EOF {
 		return protocol.MsgIoError, ioErr(req.RequestID, mapErrno(err)), nil
 	}
 
-	resp := &protocol.ReadOkResponse{RequestID: req.RequestID, Data: buf[:n]}
-	return protocol.MsgReadOk, resp.Encode(), nil
+	return protocol.MsgReadOk, resp[:2+n], nil
 }
 
 func (h *Handler) handleWrite(payload []byte) (uint8, []byte, error) {
