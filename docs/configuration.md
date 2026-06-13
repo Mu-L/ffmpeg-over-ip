@@ -112,34 +112,6 @@ The server looks for `ffmpeg` and `ffprobe` in the same directory as its own bin
 }
 ```
 
-## Performance Tuning
-
-The patched `ffmpeg` on the server tunnels its file reads back to the client. To cut round trips, the fio layer reads ahead, prefetches the next block while the current one is consumed, and caches recently-read ranges. Two optional environment variables tune this. They are read by `ffmpeg` at startup, so set them in the **server's** environment — the server passes its environment through to the `ffmpeg` it launches. The defaults suit most workloads; you rarely need to change them.
-
-| Variable | Default | Description |
-|---|---|---|
-| `FFOIP_READAHEAD_BYTES` | `2097152` (2 MiB) | Maximum read-ahead window per open file. The window starts small and grows toward this value on sustained sequential reads. Values above 16 MiB are clamped. Set to `0` to disable read-ahead and prefetch entirely (one network read per ffmpeg read). |
-| `FFOIP_RANGE_CACHE_BYTES` | `268435456` (256 MiB) | Maximum bytes of previously-read ranges cached per open file, so backward seeks and re-reads are served without a round trip. Only applies to read-only files of 256 MiB or smaller. Set to `0` to disable the range cache. |
-
-Notes:
-
-- Both values are byte counts. An unparseable value is ignored with a warning and the default is used.
-- When `FFOIP_READAHEAD_BYTES` is left unset, a smaller automatic cap (1.25 MiB) is applied to files under 1 GiB; setting the variable explicitly overrides that heuristic for all files.
-- These knobs trade a little server memory for fewer round trips. Larger values help high-latency links and sequential reads; they don't help seek-heavy access, where read-ahead resets on every seek.
-
-```bash
-# Set in the server's environment (shell, systemd unit, etc.)
-FFOIP_READAHEAD_BYTES=4194304 FFOIP_RANGE_CACHE_BYTES=536870912 \
-  ffmpeg-over-ip-server --config /etc/ffmpeg-over-ip.server.jsonc
-
-# Docker: pass through with -e
-docker run \
-  -e FFOIP_READAHEAD_BYTES=4194304 \
-  -e FFMPEG_OVER_IP_SERVER_ADDRESS=0.0.0.0:5050 \
-  -e FFMPEG_OVER_IP_SERVER_AUTH_SECRET=my-secret \
-  your-server-image
-```
-
 ## ffprobe
 
 The client detects ffprobe mode from its binary name. Create a symlink (or copy) whose name contains "ffprobe":
@@ -261,3 +233,31 @@ The `address` field supports TCP and Unix domain sockets:
 | `unix:/path` | `"unix:/tmp/ffmpeg.sock"` | Unix domain socket |
 
 Unix domain sockets work on Linux, macOS, and Windows 10+. The server automatically cleans up the socket file on shutdown.
+
+## Performance Tuning
+
+The patched `ffmpeg` on the server tunnels its file reads back to the client. To cut round trips, the fio layer reads ahead, prefetches the next block while the current one is consumed, and caches recently-read ranges. Two optional environment variables tune this. They are read by `ffmpeg` at startup, so set them in the **server's** environment — the server passes its environment through to the `ffmpeg` it launches. The defaults suit most workloads; you rarely need to change them.
+
+| Variable | Default | Description |
+|---|---|---|
+| `FFOIP_READAHEAD_BYTES` | `2097152` (2 MiB) | Maximum read-ahead window per open file. The window starts small and grows toward this value on sustained sequential reads. Values above 16 MiB are clamped. Set to `0` to disable read-ahead and prefetch entirely (one network read per ffmpeg read). |
+| `FFOIP_RANGE_CACHE_BYTES` | `268435456` (256 MiB) | Maximum bytes of previously-read ranges cached per open file, so backward seeks and re-reads are served without a round trip. Only applies to read-only files of 256 MiB or smaller. Set to `0` to disable the range cache. |
+
+Notes:
+
+- Both values are byte counts. An unparseable value is ignored with a warning and the default is used.
+- When `FFOIP_READAHEAD_BYTES` is left unset, a smaller automatic cap (1.25 MiB) is applied to files under 1 GiB; setting the variable explicitly overrides that heuristic for all files.
+- These knobs trade a little server memory for fewer round trips. Larger values help high-latency links and sequential reads; they don't help seek-heavy access, where read-ahead resets on every seek.
+
+```bash
+# Set in the server's environment (shell, systemd unit, etc.)
+FFOIP_READAHEAD_BYTES=4194304 FFOIP_RANGE_CACHE_BYTES=536870912 \
+  ffmpeg-over-ip-server --config /etc/ffmpeg-over-ip.server.jsonc
+
+# Docker: pass through with -e
+docker run \
+  -e FFOIP_READAHEAD_BYTES=4194304 \
+  -e FFMPEG_OVER_IP_SERVER_ADDRESS=0.0.0.0:5050 \
+  -e FFMPEG_OVER_IP_SERVER_AUTH_SECRET=my-secret \
+  your-server-image
+```
