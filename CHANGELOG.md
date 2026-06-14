@@ -8,6 +8,8 @@ the `v1`–`v4` history.
 
 ## Unreleased
 
+## 5.2.1 - 2026-06-14
+
 ### Performance
 
 - **Read-ahead, async prefetch, and range cache for tunneled fio reads** (#24) —
@@ -19,6 +21,10 @@ the `v1`–`v4` history.
   `FFOIP_READAHEAD_BYTES` and `FFOIP_RANGE_CACHE_BYTES` environment variables
   (set `FFOIP_READAHEAD_BYTES=0` to disable). No protocol or configuration
   changes are required.
+
+### Fixed
+
+- `build-release.sh` host scripts now run on macOS.
 
 ## 5.2.0 - 2026-05-20
 
