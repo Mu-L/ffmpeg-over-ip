@@ -290,6 +290,51 @@ fi
 echo "=== Preparing Docker images for $TARGET ==="
 cd "$BUILDER_DIR"
 
+# jellyfin's host-side builder scripts (generate.sh, build.sh, util/vars.sh)
+# assume a GNU/Linux host: bash 4+, GNU sed/stat, and Debian's dpkg. macOS ships
+# bash 3.2 and BSD userland, so each of those breaks. Rewrite the incompatible
+# bits in place after the submodule reset (which is why this re-applies every
+# build). Literal string replacements that assert-on-miss, so a future submodule
+# bump that moves these lines fails loudly instead of silently no-op'ing.
+# CI builds ffmpeg via scripts/build-ffmpeg.sh, not this script, so these patches
+# only ever run here.
+python3 - "$(uname -s)" <<'PYEOF'
+import sys
+host = sys.argv[1]
+
+def patch(path, repls):
+    with open(path) as f:
+        text = f.read()
+    for old, new in repls:
+        if old in text:
+            text = text.replace(old, new)
+        else:
+            # Idempotent: a skipped reset can leave files already patched. Each
+            # `new` is chosen to not contain its `old`, so this never re-applies.
+            assert new in text, f"{path}: found neither old nor patched form of {old!r} (jellyfin layout changed?)"
+    with open(path, "w") as f:
+        f.write(text)
+
+# bash 4 ${VAR,,} lowercase -> portable tr
+patch("util/vars.sh", [
+    ('REPO="${REPO,,}"', 'REPO="$(echo "$REPO" | tr "[:upper:]" "[:lower:]")"'),
+])
+patch("generate.sh", [
+    ("sed -s ", "sed "),                                   # GNU-only `-s` (separate) flag
+    ("${SCRIPTS[-1]}", "${SCRIPTS[$((${#SCRIPTS[@]}-1))]}"),  # bash 4.3 negative array index
+])
+patch("build.sh", [
+    ("shopt -s globstar",                                                         # bash 4 globstar
+     ":  # globstar unavailable on bash 3.2; scripts.d scanned via find below"),
+    ("for script in scripts.d/**/*.sh; do",                                       # globstar `**`
+     'for script in $(find scripts.d -name "*.sh" | sort); do'),
+    ("dpkg-parsechangelog --show-field Version -l ffbuild/ffmpeg/debian/changelog",  # Debian-only
+     "awk -F'[()]' '/^jellyfin-ffmpeg/{print $2; exit}' ffbuild/ffmpeg/debian/changelog"),
+])
+if host == "Darwin":
+    patch("build.sh", [('stat -c "%u"', 'stat -f "%u"')])  # BSD stat uses -f, not GNU -c
+PYEOF
+
 echo "Base image..."
 build_or_pull "$LOCAL_REPO/base:latest" "images/base/"
 push_cache "$LOCAL_REPO/base:latest"
@@ -304,7 +349,8 @@ REGISTRY_OVERRIDE=localhost GITHUB_REPOSITORY="ffmpeg-over-ip" \
     ./generate.sh "$TARGET" gpl
 
 # Remove --link from COPY instructions — incompatible with overlayfs-on-overlayfs (Docker-in-K8s)
-sed -i 's/COPY --link /COPY /g' Dockerfile
+# (temp-file rewrite instead of `sed -i`, which differs between GNU and macOS/BSD sed)
+sed 's/COPY --link /COPY /g' Dockerfile > Dockerfile.tmp && mv Dockerfile.tmp Dockerfile
 
 echo "$TARGET-gpl image (all HW acceleration deps)..."
 build_or_pull "$LOCAL_REPO/$TARGET-gpl:latest" "."
